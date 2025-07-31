@@ -9,17 +9,24 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var (
+	url    string
+	output string
+)
+
 var rootCmd = &cobra.Command{
-	Use:   "image-downloader <url> <output>",
+	Use:   "image-downloader",
 	Short: "Downloads an image using custom headers",
-	Args:  cobra.ExactArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
-		url := args[0]
-		output := args[1]
+		if url == "" {
+			fmt.Fprintln(os.Stderr, "Error: --url is required")
+			cmd.Usage()
+			os.Exit(1)
+		}
 
 		err := downloadImage(url, output)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Download failed: %v\n", err)
 			os.Exit(1)
 		}
 
@@ -28,6 +35,11 @@ var rootCmd = &cobra.Command{
 }
 
 func Execute() {
+	rootCmd.Flags().StringVarP(&url, "url", "u", "", "URL of the image to download (required)")
+	rootCmd.Flags().StringVarP(&output, "output", "o", "output.jpg", "Output filename (default: output.jpg)")
+
+	rootCmd.MarkFlagRequired("url")
+
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Command failed: %v\n", err)
 		os.Exit(1)
@@ -42,7 +54,7 @@ func downloadImage(url, output string) error {
 		return err
 	}
 
-	// Mimic a real browser
+	// Emulate browser headers
 	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36")
 	req.Header.Set("Referer", "https://uhdpaper.com/")
 
@@ -53,15 +65,15 @@ func downloadImage(url, output string) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to download: %s", resp.Status)
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status)
 	}
 
-	out, err := os.Create(output)
+	outFile, err := os.Create(output)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	defer outFile.Close()
 
-	_, err = io.Copy(out, resp.Body)
+	_, err = io.Copy(outFile, resp.Body)
 	return err
 }
