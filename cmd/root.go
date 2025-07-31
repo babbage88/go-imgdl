@@ -40,7 +40,7 @@ var rootCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		fmt.Println(styleSuccess.Render("Downloaded successfully to " + output))
+		fmt.Println(styleSuccess.Foreground(lipgloss.Color("#00ffcc")).Padding(1).Render("Downloaded successfully to " + output))
 	},
 }
 
@@ -140,11 +140,15 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m progressModel) View() string {
-	if m.done {
-		return styleSuccess.Render("\n✅ Download complete\n")
-	}
-	bar := m.progress.ViewAs(m.percent)
 	percent := fmt.Sprintf("%.0f%%", m.percent*100)
+	bar := m.progress.ViewAs(m.percent)
+	if m.done {
+		// show bar at 100% plus success text but keep bar visible
+		return lipgloss.NewStyle().Padding(1).Render(
+			fmt.Sprintf("Downloading... %s\n%s\n\n",
+				percent, bar),
+		)
+	}
 	return lipgloss.NewStyle().Padding(1).Render(fmt.Sprintf("Downloading... %s\n%s", percent, bar))
 }
 
