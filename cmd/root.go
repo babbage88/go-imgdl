@@ -26,7 +26,7 @@ var styleSuccess = lipgloss.NewStyle().
 	Bold(true)
 
 var rootCmd = &cobra.Command{
-	Use:   "image-downloader",
+	Use:   "imgdl",
 	Short: "Downloads an image with a progress bar",
 	Run: func(cmd *cobra.Command, args []string) {
 		if url == "" {
@@ -69,23 +69,26 @@ func downloadImageWithProgress(url, output string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status)
 	}
 
 	outFile, err := os.Create(output)
 	if err != nil {
+		resp.Body.Close()
 		return err
 	}
 	defer outFile.Close()
 
 	m := NewProgressModel(resp.ContentLength, outFile)
+	m.respBody = resp.Body // assign the reader here!
+
 	p := tea.NewProgram(m)
 	if err := p.Start(); err != nil {
 		return err
 	}
+	resp.Body.Close()
 	return nil
 }
 
@@ -124,7 +127,8 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case ProgressMsg:
 		m.percent = float64(msg)
-		return m, nil
+		// Schedule next chunk read command:
+		return m, m.readChunk(m.respBody, m.writer, m.total, int64(m.percent*float64(m.total)))
 	case DownloadDoneMsg:
 		m.done = true
 		return m, tea.Quit
@@ -145,40 +149,61 @@ func (m progressModel) View() string {
 }
 
 func (m progressModel) download() tea.Cmd {
+	return m.readChunk(m.respBody, m.writer, m.total, 0)
+}
+
+func (m progressModel) readChunk(r io.Reader, w io.Writer, total int64, written int64) tea.Cmd {
 	return func() tea.Msg {
-		req, _ := http.NewRequest("GET", url, nil)
-		req.Header.Set("User-Agent", "Mozilla/5.0")
-		resp, err := http.DefaultClient.Do(req)
+		buf := make([]byte, 32*1024)
+		n, err := r.Read(buf)
+		if n > 0 {
+			if _, werr := w.Write(buf[:n]); werr != nil {
+				return DownloadErrorMsg{Err: werr}
+			}
+			written += int64(n)
+			progress := float64(written) / float64(total)
+			if progress > 1 {
+				progress = 1
+			}
+			return ProgressMsg(progress)
+		}
+		if err == io.EOF {
+			return DownloadDoneMsg{}
+		}
 		if err != nil {
 			return DownloadErrorMsg{Err: err}
 		}
-		defer resp.Body.Close()
+		return ProgressMsg(float64(written) / float64(total))
+	}
+}
 
-		buf := make([]byte, 32*1024)
-		var written int64
-		for {
-			n, err := resp.Body.Read(buf)
-			if n > 0 {
-				_, werr := m.writer.Write(buf[:n])
-				if werr != nil {
-					return DownloadErrorMsg{Err: werr}
-				}
-				written += int64(n)
-				ratio := float64(written) / float64(m.total)
-				if ratio > 1 {
-					ratio = 1
-				}
-				// Send progress update
-				if m.total > 0 {
-					return ProgressMsg(ratio)
-				}
+func readAndTrackProgress(r io.Reader, w io.Writer, total int64) tea.Msg {
+	buf := make([]byte, 32*1024)
+	var written int64
+
+	for {
+		n, err := r.Read(buf)
+		if n > 0 {
+			if _, werr := w.Write(buf[:n]); werr != nil {
+				return DownloadErrorMsg{Err: werr}
 			}
-			if err == io.EOF {
-				return DownloadDoneMsg{}
+			written += int64(n)
+			progress := float64(written) / float64(total)
+			if progress > 1 {
+				progress = 1
 			}
-			if err != nil {
-				return DownloadErrorMsg{Err: err}
+			if total > 0 {
+				// yield message
+				return ProgressMsg(progress)
 			}
 		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return DownloadErrorMsg{Err: err}
+		}
 	}
+
+	return DownloadDoneMsg{}
 }
